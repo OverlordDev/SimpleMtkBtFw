@@ -44,6 +44,13 @@ Load order:
 
 Do not inject another Bluetooth firmware loader that binds to the same USB Bluetooth device.
 
+## MT7921 / MT7922 on macOS Sequoia (native `bluetoothd` path)
+
+macOS 15 ships its own MediaTek Bluetooth code in `bluetoothd`. With a small `BlueToolFixup` build
+(`BlueToolFixup-MediaTek/`), two NVRAM variables and the ROM patch in `/etc/bluetool`, MT7921
+(`0489:E0CD`) reaches `Chipset: SRS_7922` with a working controller. Full guide and rationale:
+[docs/MT7921-Sequoia.md](docs/MT7921-Sequoia.md).
+
 ## Troubleshooting
 
 - Check kernel logs for `SimpleMtkBtFw` and `SimpleMtkBtPatcher`.

@@ -1,0 +1,73 @@
+diff --git a/BrcmPatchRAM/BlueToolFixup.cpp b/BrcmPatchRAM/BlueToolFixup.cpp
+index e592e66..a7d859c 100644
+--- a/BrcmPatchRAM/BlueToolFixup.cpp
++++ b/BrcmPatchRAM/BlueToolFixup.cpp
+@@ -161,6 +161,32 @@ static const uint8_t kBadChipsetCheckPatched15_4[] =
+     0x90, 0x90
+ };
+ 
++// --- MediaTek native path of bluetoothd (macOS 15.x, 24H32 x86_64) -----------------------------------------
++// bluetoothd ships a Linux-btmtk port (firmware from /etc/bluetool, "USB SRS" transport, chipset type 0xB) that is
++// whitelisted for exactly one USB device, Foxconn 0489:E0D8, in two places:
++//   Found_USB_Dongle:       xorl  $0xE0D8, %esi           81 F6 D8 E0 00 00
++//   OI_HciIfc_Init_USB_SRS: cmpw  $0xE0D8, 0x16(%rdi)     66 81 7F 16 D8 E0
++// Both sequences are unique in the binary. The PID immediate is rewritten to the PID of the card in this machine
++// (default 0xE0CD, Foxconn MT7921; override with the smbtpid=<n> boot-arg). Disable with -smbtmtkoff.
++static const uint8_t kMtkXorOriginal[]  = { 0x81, 0xF6, 0xD8, 0xE0, 0x00, 0x00 };
++static uint8_t       kMtkXorPatched[]   = { 0x81, 0xF6, 0xCD, 0xE0, 0x00, 0x00 };
++static const uint8_t kMtkCmpwOriginal[] = { 0x66, 0x81, 0x7F, 0x16, 0xD8, 0xE0 };
++static uint8_t       kMtkCmpwPatched[]  = { 0x66, 0x81, 0x7F, 0x16, 0xCD, 0xE0 };
++static bool shouldPatchMtk = true;
++
++// bluetoothd's mtkFWPatchUsingUsingCmd() (VA 0x1000ce5ab on 24H32) sends ROM-patch data in WMT chunks of
++// 0x7BA (1978) bytes. The MT7921 ROM accepts the first command (section map, 61 bytes) but stalls the control
++// pipe after one 64-byte packet of the first big chunk (kernel: "endpoint 0x00 status timeout: 64 bytes").
++// Linux btmtk and the old SimpleMtkBtFw use 250. The three immediates are rewritten to the chunk size
++// (default 250, override: smbtchunk=<n>, n <= 1978; disable with -smbtchunkoff).
++static const uint8_t kMtkChunk1Original[] = { 0xBF, 0xBA, 0x07, 0x00, 0x00, 0x41, 0x39, 0xFC };
++static uint8_t       kMtkChunk1Patched[]  = { 0xBF, 0xFA, 0x00, 0x00, 0x00, 0x41, 0x39, 0xFC };
++static const uint8_t kMtkChunk2Original[] = { 0x81, 0xF9, 0xBA, 0x07, 0x00, 0x00, 0x0F, 0x92, 0xC0 };
++static uint8_t       kMtkChunk2Patched[]  = { 0x81, 0xF9, 0xFA, 0x00, 0x00, 0x00, 0x0F, 0x92, 0xC0 };
++static const uint8_t kMtkChunk3Original[] = { 0x81, 0xF9, 0xBA, 0x07, 0x00, 0x00, 0x72, 0x05 };
++static uint8_t       kMtkChunk3Patched[]  = { 0x81, 0xF9, 0xFA, 0x00, 0x00, 0x00, 0x72, 0x05 };
++static bool shouldPatchMtkChunk = true;
++
+ static bool shouldPatchBoardId = false;
+ static bool shouldPatchAddress = false;
+ static bool shouldPatchNvramCheck = false;
+@@ -236,6 +262,15 @@ static void patched_cs_validate_page(vnode_t vp, memory_object_t pager, memory_o
+                 searchAndPatch(data, PAGE_SIZE, path, boardIdsWithUSBBluetooth[0], kBoardIdSize, BaseDeviceInfo::get().boardIdentifier, kBoardIdSize);
+             if (shouldPatchAddress)
+                 searchAndPatchWithMask(data, PAGE_SIZE, path, kSkipAddressCheckOriginal, kSkipAddressCheckMask, kSkipAddressCheckPatched, kSkipAddressCheckMask);
++            if (shouldPatchMtk) {
++                searchAndPatch(data, PAGE_SIZE, path, kMtkXorOriginal, sizeof(kMtkXorOriginal), kMtkXorPatched, sizeof(kMtkXorPatched));
++                searchAndPatch(data, PAGE_SIZE, path, kMtkCmpwOriginal, sizeof(kMtkCmpwOriginal), kMtkCmpwPatched, sizeof(kMtkCmpwPatched));
++            }
++            if (shouldPatchMtkChunk) {
++                searchAndPatch(data, PAGE_SIZE, path, kMtkChunk1Original, sizeof(kMtkChunk1Original), kMtkChunk1Patched, sizeof(kMtkChunk1Patched));
++                searchAndPatch(data, PAGE_SIZE, path, kMtkChunk2Original, sizeof(kMtkChunk2Original), kMtkChunk2Patched, sizeof(kMtkChunk2Patched));
++                searchAndPatch(data, PAGE_SIZE, path, kMtkChunk3Original, sizeof(kMtkChunk3Original), kMtkChunk3Patched, sizeof(kMtkChunk3Patched));
++            }
+         }
+     }
+ }
+@@ -267,6 +302,19 @@ static void pluginStart() {
+             shouldPatchAddress = checkKernelArgument("-btlfxallowanyaddr");
+         if (getKernelVersion() <= KernelVersion::Sonoma)
+             shouldPatchNvramCheck = checkKernelArgument("-btlfxnvramcheck");
++        shouldPatchMtk = !checkKernelArgument("-smbtmtkoff");
++        shouldPatchMtkChunk = !checkKernelArgument("-smbtchunkoff");
++        uint32_t mtkChunk = 250;
++        if (lilu_get_boot_args("smbtchunk", &mtkChunk, sizeof(mtkChunk)) && (mtkChunk == 0 || mtkChunk > 0x7BA))
++            mtkChunk = 250;
++        kMtkChunk1Patched[1] = static_cast<uint8_t>(mtkChunk & 0xFF); kMtkChunk1Patched[2] = static_cast<uint8_t>((mtkChunk >> 8) & 0xFF);
++        kMtkChunk2Patched[2] = static_cast<uint8_t>(mtkChunk & 0xFF); kMtkChunk2Patched[3] = static_cast<uint8_t>((mtkChunk >> 8) & 0xFF);
++        kMtkChunk3Patched[2] = static_cast<uint8_t>(mtkChunk & 0xFF); kMtkChunk3Patched[3] = static_cast<uint8_t>((mtkChunk >> 8) & 0xFF);
++        uint32_t mtkPid = 0;
++        if (lilu_get_boot_args("smbtpid", &mtkPid, sizeof(mtkPid)) && mtkPid > 0 && mtkPid <= 0xFFFF) {
++            kMtkXorPatched[2]  = kMtkCmpwPatched[4] = static_cast<uint8_t>(mtkPid & 0xFF);
++            kMtkXorPatched[3]  = kMtkCmpwPatched[5] = static_cast<uint8_t>((mtkPid >> 8) & 0xFF);
++        }
+         KernelPatcher::RouteRequest csRoute = KernelPatcher::RouteRequest("_cs_validate_page", patched_cs_validate_page, orig_cs_validate);
+         if (!patcher.routeMultipleLong(KernelPatcher::KernelID, &csRoute, 1))
+             SYSLOG(MODULE_SHORT, "failed to route cs validation pages");
