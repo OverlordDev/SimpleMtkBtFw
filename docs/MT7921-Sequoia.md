@@ -30,12 +30,8 @@ treats such a device as the internal controller and skips it.
 
 ## Install
 
-1. OpenCore `Kernel -> Add` order: `Lilu`, `SimpleMtkBtFw`, `BlueToolFixup` (the MediaTek build).
-   Remove the stock `BlueToolFixup.kext` and any Intel/Broadcom Bluetooth injectors.
-2. Merge `config/NVRAM-bluetooth.plist` into `config.plist` (Add **and** Delete lists).
-3. `tools/install-firmware.sh` (needs sudo) – creates `/etc/bluetool/BT_RAM_CODE_MT7922_1_1_hdr.bin`.
-4. If your card is not `0489:E0CD`, add the boot-arg `smbtpid=<decimal or 0xHEX>` (vendor must be `0x0489`).
-5. Power off completely, wait 10+ seconds, boot.
+See the step-by-step guide in the [README](../README.md#mt7921--mt7922-on-macos-sequoia--installation-guide)
+(Russian: [INSTALL_RU.md](INSTALL_RU.md)).
 
 ## Expected log (`log show --last boot --predicate 'process == "bluetoothd"'`)
 
